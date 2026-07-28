@@ -144,23 +144,18 @@ router.post('/verify-email', async (req, res) => {
   try {
     const { email, code } = req.body;
 
-    if (!email || code === undefined || code === null) {
+    if (!email || !code) {
       return res.status(400).json({ error: 'Email and OTP code are required.' });
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    const cleanCode = String(code).trim(); // <-- Safely convert number to string
-
     const user = await prisma.user.findUnique({ where: { email: cleanEmail } });
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Safely compare database string and input string
-    const dbCode = String(user.verificationCode || '').trim();
-    
-    if (dbCode !== cleanCode) {
+    if (user.verificationCode !== code.trim()) {
       return res.status(400).json({ error: 'Invalid verification code. Please check and try again.' });
     }
 
@@ -182,10 +177,9 @@ router.post('/verify-email', async (req, res) => {
     res.json({ message: 'Email verified successfully! You can now log in.' });
   } catch (error) {
     console.error('VERIFICATION ERROR:', error);
-    res.status(500).json({ error: 'Email verification failed: ' + error.message });
+    res.status(500).json({ error: 'Email verification failed.' });
   }
 });
-
 
 // LOGIN
 router.post('/login', async (req, res) => {
