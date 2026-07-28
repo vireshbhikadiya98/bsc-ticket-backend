@@ -64,7 +64,7 @@ const requireAdmin = async (req, res, next) => {
 // =============================================================================
 
 // SIGNUP
-router.post('/signup', async (req, res) => {
+router.post('/register', async (req, res) => {
   try {
     const { email, password, confirmPassword, referralCode } = req.body;
 
