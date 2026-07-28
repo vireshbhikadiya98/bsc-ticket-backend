@@ -149,21 +149,19 @@ router.post('/verify-email', async (req, res) => {
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    const cleanCode = String(code).trim();
+    const cleanCode = String(code).trim(); // <-- Safely convert number to string
 
     const user = await prisma.user.findUnique({ where: { email: cleanEmail } });
 
     if (!user) {
-      return res.status(404).json({ error: `User with email ${cleanEmail} not found.` });
+      return res.status(404).json({ error: 'User not found' });
     }
 
-    console.log(`[VERIFY OTP] DB Code: "${user.verificationCode}" | Received Code: "${cleanCode}"`);
-
-    if (String(user.verificationCode).trim() !== cleanCode) {
-      return res.status(400).json({ 
-        error: 'Invalid verification code. Please check and try again.',
-        debug: `Expected: ${user.verificationCode}, Received: ${cleanCode}` // Temporary debug line
-      });
+    // Safely compare database string and input string
+    const dbCode = String(user.verificationCode || '').trim();
+    
+    if (dbCode !== cleanCode) {
+      return res.status(400).json({ error: 'Invalid verification code. Please check and try again.' });
     }
 
     // Check OTP Expiry
@@ -187,6 +185,7 @@ router.post('/verify-email', async (req, res) => {
     res.status(500).json({ error: 'Email verification failed: ' + error.message });
   }
 });
+
 
 // LOGIN
 router.post('/login', async (req, res) => {
