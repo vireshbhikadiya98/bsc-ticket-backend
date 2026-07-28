@@ -149,16 +149,21 @@ router.post('/verify-email', async (req, res) => {
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    const cleanCode = String(Code).trim(); // <-- Guarantees string type safely
+    const cleanCode = String(code).trim();
+
     const user = await prisma.user.findUnique({ where: { email: cleanEmail } });
 
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ error: `User with email ${cleanEmail} not found.` });
     }
 
-    // Safely compare strings
-    if (!user.verificationCode || String(user.verificationCode).trim() !== cleanCode) {
-      return res.status(400).json({ error: 'Invalid verification code. Please check and try again.' });
+    console.log(`[VERIFY OTP] DB Code: "${user.verificationCode}" | Received Code: "${cleanCode}"`);
+
+    if (String(user.verificationCode).trim() !== cleanCode) {
+      return res.status(400).json({ 
+        error: 'Invalid verification code. Please check and try again.',
+        debug: `Expected: ${user.verificationCode}, Received: ${cleanCode}` // Temporary debug line
+      });
     }
 
     // Check OTP Expiry
@@ -179,7 +184,7 @@ router.post('/verify-email', async (req, res) => {
     res.json({ message: 'Email verified successfully! You can now log in.' });
   } catch (error) {
     console.error('VERIFICATION ERROR:', error);
-    res.status(500).json({ error: 'Email verification failed.' });
+    res.status(500).json({ error: 'Email verification failed: ' + error.message });
   }
 });
 
