@@ -1,0 +1,119 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+enum CycleStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+enum WithdrawalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// -----------------------------------------------------------------------------
+// MODELS
+// -----------------------------------------------------------------------------
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique
+  password         String
+  username         String?   @unique
+  isVerified       Boolean   @default(false)
+  verificationCode String?
+  otpExpiresAt     DateTime?
+
+  referralCode String  @unique
+  sponsorId    String?
+  sponsor      User?   @relation("ReferralTree", fields: [sponsorId], references: [id])
+  referrals    User[]  @relation("ReferralTree")
+
+  role String @default("USER")
+
+  fundingWallet Decimal @default(0.0000) @db.Decimal(18, 4)
+  earningWallet Decimal @default(0.0000) @db.Decimal(18, 4)
+
+  ticketCycles       TicketCycle[]
+  deposits           Deposit[]
+  withdrawals        Withdrawal[]
+  beneficiaryRewards ReferralReward[] @relation("Beneficiary")
+  fromUserRewards    ReferralReward[] @relation("FromUser")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TicketCycle {
+  id           String      @id @default(uuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id])
+  ticketLevel  Int
+  amount       Decimal     @db.Decimal(18, 4)
+  dailyReturn  Decimal     @default(1.0) @db.Decimal(5, 2)
+  durationDays Int         @default(3)
+  status       CycleStatus @default(IN_PROGRESS)
+  createdAt    DateTime    @default(now())
+  endsAt       DateTime
+}
+
+model Deposit {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  amount      Decimal  @db.Decimal(18, 4)
+  txHash      String   @unique
+  fromAddress String
+  toAddress   String
+  status      String   @default("PENDING")
+  createdAt   DateTime @default(now())
+}
+
+model Withdrawal {
+  id          String           @id @default(uuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id])
+  amount      Decimal          @db.Decimal(18, 4)
+  destAddress String
+  status      WithdrawalStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+}
+
+model ReferralReward {
+  id            String   @id @default(uuid())
+  beneficiaryId String
+  beneficiary   User     @relation("Beneficiary", fields: [beneficiaryId], references: [id])
+  fromUserId    String
+  fromUser      User     @relation("FromUser", fields: [fromUserId], references: [id])
+  tier          Int
+  amount        Decimal  @db.Decimal(18, 4)
+  createdAt     DateTime @default(now())
+}
+
+model Banner {
+  id        String   @id @default(uuid())
+  imageUrl  String
+  title     String?
+  linkUrl   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model SystemSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
