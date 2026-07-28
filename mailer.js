@@ -44,4 +44,7 @@ const sendVerificationEmail = async (toEmail, otpCode) => {
   return await transporter.sendMail(mailOptions);
 };
 
-module.exports = sendVerificationEmail;
+module.exports = {
+  sendVerificationEmail,
+  verifyTransporter,
+};
