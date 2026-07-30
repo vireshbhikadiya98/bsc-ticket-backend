@@ -7,113 +7,120 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// -----------------------------------------------------------------------------
-// ENUMS
-// -----------------------------------------------------------------------------
-
-enum CycleStatus {
-  IN_PROGRESS
-  COMPLETED
-  FAILED
+enum Role {
+  USER
+  ADMIN
 }
 
-enum WithdrawalStatus {
+enum DepositStatus {
   PENDING
   APPROVED
   REJECTED
 }
 
-// -----------------------------------------------------------------------------
-// MODELS
-// -----------------------------------------------------------------------------
-
 model User {
-  id               String    @id @default(uuid())
-  email            String    @unique
-  password         String
-  username         String?   @unique
-  isVerified       Boolean   @default(false)
-  verificationCode String?
-  otpExpiresAt     DateTime?
+  id              String   @id @default(uuid())
+  walletAddress   String   @unique
+  username        String?
+  password        String
+  referralCode    String   @unique
+  sponsorId       String?
+  sponsor         User?    @relation("ReferralTree", fields: [sponsorId], references: [id])
+  referrals       User[]   @relation("ReferralTree")
 
-  referralCode String  @unique
-  sponsorId    String?
-  sponsor      User?   @relation("ReferralTree", fields: [sponsorId], references: [id])
-  referrals    User[]  @relation("ReferralTree")
+  role            Role     @default(USER)
+  fundingWallet   Float    @default(0.0)
+  earningWallet   Float    @default(0.0)
+  isVerified      Boolean  @default(true) // Set to true by default (No OTP needed)
 
-  role String @default("USER")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  fundingWallet Decimal @default(0.0000) @db.Decimal(18, 4)
-  earningWallet Decimal @default(0.0000) @db.Decimal(18, 4)
-
-  ticketCycles       TicketCycle[]
-  deposits           Deposit[]
-  withdrawals        Withdrawal[]
-  beneficiaryRewards ReferralReward[] @relation("Beneficiary")
-  fromUserRewards    ReferralReward[] @relation("FromUser")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  // Relations
+  deposits        Deposit[]
+  purchases       TicketPurchase[]
+  levelProgress   UserLevelProgress[]
+  referralRewards ReferralReward[]
 }
 
-model TicketCycle {
-  id           String      @id @default(uuid())
-  userId       String
-  user         User        @relation(fields: [userId], references: [id])
-  ticketLevel  Int
-  amount       Decimal     @db.Decimal(18, 4)
-  dailyReturn  Decimal     @default(1.0) @db.Decimal(5, 2)
-  durationDays Int         @default(3)
-  status       CycleStatus @default(IN_PROGRESS)
-  createdAt    DateTime    @default(now())
-  endsAt       DateTime
+// Dynamic Ticket Levels (Admin Configurable)
+model TicketLevel {
+  id                  Int                 @id @default(autoincrement())
+  levelNumber         Int                 @unique // 1, 2, 3, 4, etc.
+  name                String              // "Level 1", "Level 2"
+  price               Float               // 25.0, 50.0, 75.0, 100.0
+  dailyRewardPercent  Float               @default(1.0) // 1%
+  requiredDaysToUnlock Int                @default(3) // 3 consecutive days of previous level needed
+  isActive            Boolean             @default(true)
+
+  purchases           TicketPurchase[]
+  levelProgress       UserLevelProgress[]
 }
 
+// Tracks daily ticket purchases per user per level
+model TicketPurchase {
+  id              String      @id @default(uuid())
+  userId          String
+  user            User        @relation(fields: [userId], references: [id])
+  levelId         Int
+  level           TicketLevel @relation(fields: [levelId], references: [id])
+
+  amount          Float
+  cycleDate       String      // e.g. "2026-07-30" (matches admin distribution epoch date)
+  principalReturned Float     @default(0.0)
+  rewardGranted   Float       @default(0.0)
+
+  createdAt       DateTime    @default(now())
+}
+
+// Tracks consecutive purchase streak and unlocked status per user per level
+model UserLevelProgress {
+  id                String      @id @default(uuid())
+  userId            String
+  user              User        @relation(fields: [userId], references: [id])
+  levelId           Int
+  level             TicketLevel @relation(fields: [levelId], references: [id])
+
+  consecutiveDays   Int         @default(0)  // Counts consecutive days purchased (1, 2, 3...)
+  isUnlocked        Boolean     @default(false)
+  lastPurchaseDate  String?     // "2026-07-30"
+
+  updatedAt         DateTime    @updatedAt
+
+  @@unique([userId, levelId])
+}
+
+// Deposit USDT by submitting TxHash
 model Deposit {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id])
-  amount      Decimal  @db.Decimal(18, 4)
-  txHash      String   @unique
-  fromAddress String
-  toAddress   String
-  status      String   @default("PENDING")
-  createdAt   DateTime @default(now())
+  id            String        @id @default(uuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  txHash        String        @unique
+  amount        Float
+  status        DepositStatus @default(PENDING)
+  adminNote     String?
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 }
 
-model Withdrawal {
-  id          String           @id @default(uuid())
-  userId      String
-  user        User             @relation(fields: [userId], references: [id])
-  amount      Decimal          @db.Decimal(18, 4)
-  destAddress String
-  status      WithdrawalStatus @default(PENDING)
-  createdAt   DateTime         @default(now())
-}
-
+// History of Referral Earnings ($1 First Purchase Bonus & 5-Level 1% Yield)
 model ReferralReward {
   id            String   @id @default(uuid())
-  beneficiaryId String
-  beneficiary   User     @relation("Beneficiary", fields: [beneficiaryId], references: [id])
-  fromUserId    String
-  fromUser      User     @relation("FromUser", fields: [fromUserId], references: [id])
-  tier          Int
-  amount        Decimal  @db.Decimal(18, 4)
+  userId        String   // Referrer receiving reward
+  user          User     @relation(fields: [userId], references: [id])
+  fromUserId    String   // Downline user who bought ticket
+  levelDepth    Int      // 1 to 5 (or 0 for $1 direct signup bonus)
+  amount        Float
+  rewardType    String   // "FIRST_PURCHASE_BONUS" or "DAILY_YIELD_MATCH"
+
   createdAt     DateTime @default(now())
 }
 
-model Banner {
-  id        String   @id @default(uuid())
-  imageUrl  String
-  title     String?
-  linkUrl   String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-}
-
+// System Settings (Admin Configurable)
 model SystemSetting {
-  id        String   @id @default(uuid())
-  key       String   @unique
-  value     String
-  updatedAt DateTime @updatedAt
+  id                Int      @id @default(1)
+  companyUsdtAddress String  @default("0x0000000000000000000000000000000000000000") // Admin Editable
+  rewardEpochTime   String   @default("07:00") // Daily reward trigger time (HH:MM format)
+  updatedAt         DateTime @updatedAt
 }
