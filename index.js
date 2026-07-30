@@ -9,6 +9,8 @@ const ticketRoutes = require('./tickets');
 const walletRoutes = require('./wallet');
 const bannerRoutes = require('./banners');
 const profileRoutes = require('./profile');
+const referralRouter = require('./referral');
+const adminRouter = require('./admin');
 
 const app = express();
 
@@ -36,6 +38,8 @@ app.use('/api/tickets', ticketRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/banners', bannerRoutes);
 app.use('/api', profileRoutes);
+app.use('/api/referrals', referralRouter);
+app.use('/api/admin', adminRouter);
 
 app.get('/', (req, res) => {
   res.send('BSC Ticket Platform Backend is running!');
