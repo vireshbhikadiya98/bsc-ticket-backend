@@ -3,7 +3,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const prisma = require('./db');
-const sendVerificationEmail = require('./mailer');
 
 const router = express.Router();
 
@@ -63,38 +62,43 @@ const requireAdmin = async (req, res, next) => {
 // AUTH ROUTES
 // =============================================================================
 
-// SIGNUP
+// SIGNUP (REGISTER WITH BSC WALLET ADDRESS)
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, confirmPassword, referralCode } = req.body;
+    const { walletAddress, username, password, confirmPassword, referralCode } = req.body;
 
-    if (!email || !password || !confirmPassword) {
-      return res.status(400).json({ error: 'All fields are required.' });
+    if (!walletAddress || !password || !confirmPassword) {
+      return res.status(400).json({ error: 'Wallet address, password, and confirm password are required.' });
     }
 
-    // 1. Check Passwords Match
+    const cleanWallet = walletAddress.trim().toLowerCase();
+
+    // 1. Validate BSC Wallet Address Format (0x + 40 hex characters)
+    if (!/^0x[a-fA-F0-9]{40}$/.test(cleanWallet)) {
+      return res.status(400).json({ error: 'Please enter a valid BSC Wallet Address (0x...).' });
+    }
+
+    // 2. Check Passwords Match
     if (password !== confirmPassword) {
       return res.status(400).json({ error: 'Passwords do not match!' });
     }
 
-    // 2. Enforce Password Policy
+    // 3. Enforce Password Policy
     if (!PASSWORD_REGEX.test(password)) {
       return res.status(400).json({
         error: 'Password must be at least 6 characters long and contain an uppercase letter, lowercase letter, number, and special character (@$!%*?&).'
       });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-
-    // 3. Check existing user
-    const existingUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
+    // 4. Check Existing User by Wallet Address
+    const existingUser = await prisma.user.findUnique({ where: { walletAddress: cleanWallet } });
     if (existingUser) {
-      return res.status(400).json({ error: 'Email is already registered. Please log in!' });
+      return res.status(400).json({ error: 'This BSC Wallet Address is already registered. Please log in!' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 4. Handle Sponsor/Referral Link
+    // 5. Handle Sponsor / Referral Link
     let sponsorId = null;
     if (referralCode && referralCode.trim() !== '') {
       const parentUser = await prisma.user.findUnique({
@@ -105,33 +109,52 @@ router.post('/register', async (req, res) => {
       }
     }
 
-    // Generate 6-digit OTP & Expiry (10 minutes)
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins from now
     const userReferralCode = await generateUniqueReferralCode();
 
+    // 6. Create User Record
     const user = await prisma.user.create({
       data: {
-        email: cleanEmail,
+        walletAddress: cleanWallet,
+        username: username ? username.trim() : null,
         password: hashedPassword,
         sponsorId,
         referralCode: userReferralCode,
-        verificationCode,
-        otpExpiresAt,
-        isVerified: false
+        isVerified: true // Set to true directly (No OTP required)
       }
     });
 
-    // Send OTP email using Nodemailer
-    try {
-      await sendVerificationEmail(cleanEmail, verificationCode);
-    } catch (mailErr) {
-      console.error('Email sending failed:', mailErr);
+    // 7. Auto-unlock Level 1 for the new user
+    const level1 = await prisma.ticketLevel.findUnique({ where: { levelNumber: 1 } });
+    if (level1) {
+      await prisma.userLevelProgress.create({
+        data: {
+          userId: user.id,
+          levelId: level1.id,
+          consecutiveDays: 0,
+          isUnlocked: true
+        }
+      });
     }
 
+    // 8. Generate Auth Token
+    const token = jwt.sign(
+      { userId: user.id, role: user.role },
+      process.env.JWT_SECRET || 'fallback_secret',
+      { expiresIn: '7d' }
+    );
+
     res.status(201).json({
-      message: 'Account created! A 6-digit OTP code has been sent to your email address (valid for 10 minutes).',
-      email: user.email
+      message: 'Account registered successfully!',
+      token,
+      user: {
+        id: user.id,
+        walletAddress: user.walletAddress,
+        username: user.username,
+        referralCode: user.referralCode,
+        fundingWallet: user.fundingWallet,
+        earningWallet: user.earningWallet,
+        role: user.role
+      }
     });
   } catch (error) {
     console.error('SIGNUP ERROR LOG:', error);
@@ -139,71 +162,25 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// VERIFY EMAIL OTP
-router.post('/verify-email', async (req, res) => {
-  try {
-    const { email, code } = req.body;
-
-    if (!email || !code) {
-      return res.status(400).json({ error: 'Email and OTP code are required.' });
-    }
-
-    const cleanEmail = email.trim().toLowerCase();
-    const user = await prisma.user.findUnique({ where: { email: cleanEmail } });
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    if (user.verificationCode !== code.trim()) {
-      return res.status(400).json({ error: 'Invalid verification code. Please check and try again.' });
-    }
-
-    // Check OTP Expiry
-    if (user.otpExpiresAt && new Date() > new Date(user.otpExpiresAt)) {
-      return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
-    }
-
-    // Mark user as verified
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        isVerified: true,
-        verificationCode: null,
-        otpExpiresAt: null
-      }
-    });
-
-    res.json({ message: 'Email verified successfully! You can now log in.' });
-  } catch (error) {
-    console.error('VERIFICATION ERROR:', error);
-    res.status(500).json({ error: 'Email verification failed.' });
-  }
-});
-
-// LOGIN
+// LOGIN (WITH BSC WALLET ADDRESS + PASSWORD)
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { walletAddress, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
+    if (!walletAddress || !password) {
+      return res.status(400).json({ error: 'BSC Wallet address and password are required' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-    const user = await prisma.user.findUnique({ where: { email: cleanEmail } });
+    const cleanWallet = walletAddress.trim().toLowerCase();
+    const user = await prisma.user.findUnique({ where: { walletAddress: cleanWallet } });
 
     if (!user) {
-      return res.status(400).json({ error: 'Invalid email or password' });
+      return res.status(400).json({ error: 'Invalid wallet address or password' });
     }
 
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) {
-      return res.status(400).json({ error: 'Invalid email or password' });
-    }
-
-    if (!user.isVerified) {
-      return res.status(403).json({ error: 'Your email is not verified yet. Please verify first!' });
+      return res.status(400).json({ error: 'Invalid wallet address or password' });
     }
 
     const token = jwt.sign(
@@ -213,15 +190,16 @@ router.post('/login', async (req, res) => {
     );
 
     res.json({
+      message: 'Logged in successfully!',
       token,
       user: {
         id: user.id,
-        email: user.email,
+        walletAddress: user.walletAddress,
+        username: user.username,
         referralCode: user.referralCode,
         fundingWallet: user.fundingWallet,
         earningWallet: user.earningWallet,
-        role: user.role,
-        isVerified: user.isVerified
+        role: user.role
       }
     });
   } catch (error) {
